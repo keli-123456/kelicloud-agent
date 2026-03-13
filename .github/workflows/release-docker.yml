@@ -1,9 +1,9 @@
 name: Publish Docker Image
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -24,6 +24,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "release tag is required" 1>&2
+            exit 1
+          fi
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -34,10 +45,7 @@ jobs:
           GOOS: linux
           CGO_ENABLED: 0
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          if [ -z "$VERSION" ]; then
-            VERSION="${{ github.sha }}"
-          fi
+          VERSION="${{ steps.release_tag.outputs.release_tag }}"
           LDFLAGS="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}"
 
           echo "Building for linux/amd64..."
@@ -65,7 +73,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ github.event.release.tag_name }}
+            type=raw,value=${{ steps.release_tag.outputs.release_tag }}
             type=raw,value=latest
 
       - name: Build and push Docker image

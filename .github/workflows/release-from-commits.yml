@@ -1,8 +1,9 @@
 name: Release notes from commits
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -16,10 +17,21 @@ jobs:
         with:
           fetch-depth: 0 # fetch all tags/commits for range and logs
 
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          if [ -z "$CURRENT_TAG" ]; then
+            echo "current tag is required" 1>&2
+            exit 1
+          fi
+          echo "current_tag=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Compute previous tag
         id: prev
         env:
-          CURRENT_TAG: ${{ github.event.release.tag_name }}
+          CURRENT_TAG: ${{ steps.meta.outputs.current_tag }}
         shell: bash
         run: |
           set -e
@@ -36,7 +48,7 @@ jobs:
       - name: Generate release notes from commits
         id: gen
         env:
-          CURRENT_TAG: ${{ github.event.release.tag_name }}
+          CURRENT_TAG: ${{ steps.meta.outputs.current_tag }}
           PREV_TAG: ${{ steps.prev.outputs.prev_tag }}
           REPO: ${{ github.repository }}
         shell: bash
@@ -62,15 +74,15 @@ jobs:
           echo "Generated notes:" && echo "-----" && cat RELEASE_NOTES.md && echo "-----"
 
       - name: Update GitHub Release body
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const notes = fs.readFileSync('RELEASE_NOTES.md', 'utf8');
-            const releaseId = context.payload.release.id;
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseId,
-              body: notes,
-            });
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_TAG: ${{ steps.meta.outputs.current_tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          if gh release view "$CURRENT_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release edit "$CURRENT_TAG" --repo "$REPO" --title "$CURRENT_TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$CURRENT_TAG" --repo "$REPO" --title "$CURRENT_TAG" --notes-file RELEASE_NOTES.md --target "$GITHUB_SHA" || \
+              gh release edit "$CURRENT_TAG" --repo "$REPO" --title "$CURRENT_TAG" --notes-file RELEASE_NOTES.md
+          fi

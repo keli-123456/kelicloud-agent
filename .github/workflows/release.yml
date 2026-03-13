@@ -1,14 +1,45 @@
 name: Release Binaries
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write 
 
 jobs:
+  ensure-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+    steps:
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "release tag is required" 1>&2
+            exit 1
+          fi
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG"
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes "" --target "$GITHUB_SHA" || \
+              gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG"
+          fi
+
   build-and-attach:
+    needs: ensure-release
     runs-on: ubuntu-latest
 
     strategy:
@@ -37,7 +68,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-          VERSION: ${{ github.event.release.tag_name }}
+          VERSION: ${{ needs.ensure-release.outputs.release_tag }}
         run: |
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
@@ -58,5 +89,5 @@ jobs:
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             true
           fi
-          gh release upload ${{ github.event.release.tag_name }} $BINARY_NAME --repo ${{ github.repository }}
+          gh release upload ${{ needs.ensure-release.outputs.release_tag }} $BINARY_NAME --repo ${{ github.repository }} --clobber
         shell: bash
