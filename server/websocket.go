@@ -18,6 +18,7 @@ import (
 )
 
 func EstablishWebSocketConnection() {
+	monitoring.StartCNConnectivityProbeLoop()
 
 	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/report?token=" + flags.Token
 	websocketEndpoint = "ws" + strings.TrimPrefix(websocketEndpoint, "http")
@@ -133,6 +134,10 @@ func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}) {
 			PingTaskID uint   `json:"ping_task_id,omitempty"`
 			PingType   string `json:"ping_type,omitempty"`
 			PingTarget string `json:"ping_target,omitempty"`
+			// Connectivity probe config
+			CNConnectivityEnabled  bool   `json:"cn_connectivity_enabled,omitempty"`
+			CNConnectivityTarget   string `json:"cn_connectivity_target,omitempty"`
+			CNConnectivityInterval int    `json:"cn_connectivity_interval,omitempty"`
 		}
 		err = json.Unmarshal(message_raw, &message)
 		if err != nil {
@@ -140,6 +145,14 @@ func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}) {
 			continue
 		}
 
+		if message.Message == "cn_connectivity_probe_config" {
+			monitoring.UpdateCNConnectivityProbeConfig(
+				message.CNConnectivityEnabled,
+				message.CNConnectivityTarget,
+				message.CNConnectivityInterval,
+			)
+			continue
+		}
 		if message.Message == "terminal" || message.TerminalId != "" {
 			go establishTerminalConnection(flags.Token, message.TerminalId, flags.Endpoint)
 			continue

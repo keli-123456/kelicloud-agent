@@ -117,6 +117,10 @@ func GenerateReport() []byte {
 	}
 	// 基础模式下，GPU信息已在basicInfo中处理
 
+	if cnConnectivity := GetCNConnectivityProbeResult(); cnConnectivity != nil {
+		data["cn_connectivity"] = cnConnectivity
+	}
+
 	data["message"] = message
 
 	s, err := json.Marshal(data)
