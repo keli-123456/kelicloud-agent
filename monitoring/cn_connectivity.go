@@ -17,9 +17,10 @@ const (
 )
 
 type CNConnectivityProbeConfig struct {
-	Enabled  bool
-	Target   string
-	Interval int
+	Enabled    bool
+	Targets    []string
+	TargetsKey string
+	Interval   int
 }
 
 type CNConnectivityProbeResult struct {
@@ -49,7 +50,7 @@ func StartCNConnectivityProbeLoop() {
 }
 
 func UpdateCNConnectivityProbeConfig(enabled bool, target string, interval int) {
-	target = strings.TrimSpace(target)
+	targets := parseCNConnectivityTargets(target)
 	if interval <= 0 {
 		interval = defaultCNConnectivityInterval
 	}
@@ -58,9 +59,10 @@ func UpdateCNConnectivityProbeConfig(enabled bool, target string, interval int) 
 	defer cnConnectivityState.mu.Unlock()
 
 	cnConnectivityState.config = CNConnectivityProbeConfig{
-		Enabled:  enabled && target != "",
-		Target:   target,
-		Interval: interval,
+		Enabled:    enabled && len(targets) > 0,
+		Targets:    targets,
+		TargetsKey: strings.Join(targets, "\n"),
+		Interval:   interval,
 	}
 
 	cnConnectivityState.failures = 0
@@ -69,7 +71,7 @@ func UpdateCNConnectivityProbeConfig(enabled bool, target string, interval int) 
 	} else {
 		cnConnectivityState.result = &CNConnectivityProbeResult{
 			Status:  "unknown",
-			Target:  target,
+			Target:  targets[0],
 			Message: "waiting for probe",
 		}
 	}
@@ -100,7 +102,7 @@ func runCNConnectivityProbeLoop() {
 			continue
 		}
 
-		result := probeCNConnectivity(config.Target)
+		result := probeCNConnectivityTargets(config.Targets)
 		storeCNConnectivityProbeResult(config, result)
 
 		timer := time.NewTimer(time.Duration(config.Interval) * time.Second)
@@ -124,7 +126,8 @@ func storeCNConnectivityProbeResult(config CNConnectivityProbeConfig, result CNC
 	cnConnectivityState.mu.Lock()
 	defer cnConnectivityState.mu.Unlock()
 
-	if cnConnectivityState.config != config || !cnConnectivityState.config.Enabled {
+	if !sameCNConnectivityProbeConfig(cnConnectivityState.config, config) ||
+		!cnConnectivityState.config.Enabled {
 		return
 	}
 
@@ -142,6 +145,60 @@ func storeCNConnectivityProbeResult(config CNConnectivityProbeConfig, result CNC
 
 	result.ConsecutiveFailures = cnConnectivityState.failures
 	cnConnectivityState.result = &result
+}
+
+func sameCNConnectivityProbeConfig(a, b CNConnectivityProbeConfig) bool {
+	return a.Enabled == b.Enabled &&
+		a.Interval == b.Interval &&
+		a.TargetsKey == b.TargetsKey
+}
+
+func parseCNConnectivityTargets(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == ',' || r == ';'
+	})
+	targets := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+
+	for _, part := range parts {
+		target := strings.TrimSpace(part)
+		if target == "" {
+			continue
+		}
+		if _, exists := seen[target]; exists {
+			continue
+		}
+		seen[target] = struct{}{}
+		targets = append(targets, target)
+	}
+
+	return targets
+}
+
+func probeCNConnectivityTargets(targets []string) CNConnectivityProbeResult {
+	if len(targets) == 0 {
+		return CNConnectivityProbeResult{
+			Status:    "degraded",
+			Message:   "no targets configured",
+			CheckedAt: time.Now(),
+		}
+	}
+
+	failures := make([]string, 0, len(targets))
+	for _, target := range targets {
+		result := probeCNConnectivity(target)
+		if result.Status == "ok" {
+			return result
+		}
+		failures = append(failures, target+": "+result.Message)
+	}
+
+	return CNConnectivityProbeResult{
+		Status:    "degraded",
+		Target:    strings.Join(targets, ", "),
+		Message:   strings.Join(failures, "; "),
+		CheckedAt: time.Now(),
+	}
 }
 
 func probeCNConnectivity(target string) CNConnectivityProbeResult {
