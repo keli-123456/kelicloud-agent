@@ -1,3 +1,23 @@
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
+
+WORKDIR /src
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+
+RUN apk add --no-cache ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+  go build -trimpath \
+  -ldflags="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" \
+  -o /out/komari-agent .
+
 FROM alpine:3.21
 
 WORKDIR /app
@@ -6,7 +26,7 @@ WORKDIR /app
 ARG TARGETOS
 ARG TARGETARCH
 
-COPY komari-agent-${TARGETOS}-${TARGETARCH} /app/komari-agent
+COPY --from=builder /out/komari-agent /app/komari-agent
 
 RUN chmod +x /app/komari-agent
 

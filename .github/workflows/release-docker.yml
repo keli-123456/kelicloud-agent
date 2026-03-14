@@ -35,25 +35,6 @@ jobs:
           fi
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      - name: Build static binaries for multi-arch
-        env:
-          GOOS: linux
-          CGO_ENABLED: 0
-        run: |
-          VERSION="${{ steps.release_tag.outputs.release_tag }}"
-          LDFLAGS="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}"
-
-          echo "Building for linux/amd64..."
-          GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o komari-agent-linux-amd64
-
-          echo "Building for linux/arm64..."
-          GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o komari-agent-linux-arm64
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -82,5 +63,7 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.release_tag.outputs.release_tag }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
