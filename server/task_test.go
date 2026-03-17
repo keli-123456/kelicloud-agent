@@ -1,62 +1,183 @@
 package server
 
 import (
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
-var testTargets = []struct {
-	target string
-}{
-	{"v6-sh-cm.oojj.de"},
-	{"2409:8c1e:8f80:2:6a::"},
-	{"[2409:8c1e:8f80:2:6a::]:80"},
-	{"v4-sh-cm.oojj.de"},
-	{"117.185.125.154"},
-	{"117.185.125.154:80"},
+func newLoopbackListener(t *testing.T, network string) net.Listener {
+	t.Helper()
+
+	addr := "127.0.0.1:0"
+	if network == "tcp6" {
+		addr = "[::1]:0"
+	}
+
+	ln, err := net.Listen(network, addr)
+	if err != nil {
+		t.Skipf("skip %s listener: %v", network, err)
+	}
+	return ln
 }
 
-func TestICMPPing(t *testing.T) {
-	timeout := 3 * time.Second
-	for _, tt := range testTargets {
-		t.Run(tt.target, func(t *testing.T) {
-			latency, err := icmpPing(tt.target, timeout)
-			if latency < -1 {
-				t.Errorf("ICMP ping %s: invalid latency %d", tt.target, latency)
-			}
+func closeAcceptedConnections(t *testing.T, ln net.Listener) func() {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
 			if err != nil {
-				t.Errorf("ICMP ping %s error: %v", tt.target, err)
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	return func() {
+		_ = ln.Close()
+		<-done
+	}
+}
+
+func newHTTPServer(t *testing.T, network string, statusCode int) (*httptest.Server, string) {
+	t.Helper()
+
+	ln := newLoopbackListener(t, network)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(statusCode)
+	}))
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv, strings.TrimPrefix(srv.URL, "http://")
+}
+
+func shouldSkipICMP(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "operation not permitted") ||
+		strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "no packets received")
+}
+
+func TestResolveIP(t *testing.T) {
+	targets := []string{"127.0.0.1", "localhost"}
+	if ip := net.ParseIP("::1"); ip != nil {
+		targets = append(targets, "::1")
+	}
+
+	for _, target := range targets {
+		t.Run(target, func(t *testing.T) {
+			resolved, err := resolveIP(target)
+			if err != nil {
+				t.Fatalf("resolveIP(%q) error: %v", target, err)
+			}
+			if net.ParseIP(resolved) == nil {
+				t.Fatalf("resolveIP(%q) returned non-IP value %q", target, resolved)
 			}
 		})
 	}
 }
 
-func TestTCPPing(t *testing.T) {
-	timeout := 3 * time.Second
-	for _, tt := range testTargets {
-		t.Run(tt.target, func(t *testing.T) {
-			latency, err := tcpPing(tt.target, timeout)
-			if latency < -1 {
-				t.Errorf("TCP ping %s: invalid latency %d", tt.target, latency)
+func TestICMPPingLoopback(t *testing.T) {
+	timeout := time.Second
+	targets := []string{"127.0.0.1"}
+	if ln, err := net.Listen("tcp6", "[::1]:0"); err == nil {
+		_ = ln.Close()
+		targets = append(targets, "::1")
+	}
+
+	for _, target := range targets {
+		t.Run(target, func(t *testing.T) {
+			latency, err := icmpPing(target, timeout)
+			if shouldSkipICMP(err) {
+				t.Skipf("icmp not available in this environment: %v", err)
 			}
 			if err != nil {
-				t.Errorf("TCP ping %s error: %v", tt.target, err)
+				t.Fatalf("icmpPing(%q) error: %v", target, err)
+			}
+			if latency < 0 {
+				t.Fatalf("icmpPing(%q) returned invalid latency %d", target, latency)
 			}
 		})
 	}
 }
 
-func TestHTTPPing(t *testing.T) {
-	timeout := 3 * time.Second
-	for _, tt := range testTargets {
-		t.Run(tt.target, func(t *testing.T) {
-			latency, err := httpPing(tt.target, timeout)
-			if latency < -1 {
-				t.Errorf("HTTP ping %s: invalid latency %d", tt.target, latency)
-			}
+func TestTCPPingLoopback(t *testing.T) {
+	timeout := time.Second
+
+	testCases := []struct {
+		name    string
+		network string
+	}{
+		{name: "ipv4", network: "tcp4"},
+		{name: "ipv6", network: "tcp6"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ln := newLoopbackListener(t, tc.network)
+			defer closeAcceptedConnections(t, ln)()
+
+			latency, err := tcpPing(ln.Addr().String(), timeout)
 			if err != nil {
-				t.Errorf("HTTP ping %s error: %v", tt.target, err)
+				t.Fatalf("tcpPing(%q) error: %v", ln.Addr().String(), err)
+			}
+			if latency < 0 {
+				t.Fatalf("tcpPing(%q) returned invalid latency %d", ln.Addr().String(), latency)
 			}
 		})
+	}
+}
+
+func TestHTTPPingLoopback(t *testing.T) {
+	timeout := time.Second
+
+	testCases := []struct {
+		name    string
+		network string
+	}{
+		{name: "ipv4", network: "tcp4"},
+		{name: "ipv6", network: "tcp6"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, target := newHTTPServer(t, tc.network, http.StatusNoContent)
+
+			for _, input := range []string{srv.URL, target} {
+				t.Run(input, func(t *testing.T) {
+					latency, err := httpPing(input, timeout)
+					if err != nil {
+						t.Fatalf("httpPing(%q) error: %v", input, err)
+					}
+					if latency < 0 {
+						t.Fatalf("httpPing(%q) returned invalid latency %d", input, latency)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestHTTPPingReturnsErrorOnServerFailure(t *testing.T) {
+	timeout := time.Second
+	_, target := newHTTPServer(t, "tcp4", http.StatusInternalServerError)
+
+	latency, err := httpPing(target, timeout)
+	if err == nil {
+		t.Fatal("expected httpPing to return an error for non-2xx status")
+	}
+	if latency < 0 {
+		t.Fatalf("httpPing(%q) returned invalid latency %d", target, latency)
 	}
 }
