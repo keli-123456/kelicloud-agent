@@ -4,6 +4,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +139,65 @@ func TestTCPPingLoopback(t *testing.T) {
 				t.Fatalf("tcpPing(%q) returned invalid latency %d", ln.Addr().String(), latency)
 			}
 		})
+	}
+}
+
+func TestHasScriptShebang(t *testing.T) {
+	if !hasScriptShebang("#!/bin/bash\necho ok\n") {
+		t.Fatal("expected bash shebang to be detected")
+	}
+	if hasScriptShebang("echo ok") {
+		t.Fatal("expected plain command to skip shebang mode")
+	}
+}
+
+func TestBuildTaskCommandUsesScriptFileForShebangScripts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-only")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash not available: %v", err)
+	}
+
+	cmd, cleanup, err := buildTaskCommand("#!/bin/bash\nprintf 'ok'")
+	if err != nil {
+		t.Fatalf("buildTaskCommand returned error: %v", err)
+	}
+	defer cleanup()
+
+	if len(cmd.Args) == 0 {
+		t.Fatal("expected script path in command args")
+	}
+	scriptPath := cmd.Args[0]
+	if !strings.Contains(scriptPath, "komari-task-") {
+		t.Fatalf("expected temp script path, got %q", scriptPath)
+	}
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("expected temp script file to exist: %v", err)
+	}
+
+	output, runErr := cmd.Output()
+	if runErr != nil {
+		t.Fatalf("expected shebang script to execute successfully, got %v", runErr)
+	}
+	if string(output) != "ok" {
+		t.Fatalf("expected output %q, got %q", "ok", string(output))
+	}
+}
+
+func TestBuildTaskCommandFallsBackToShellForPlainCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-only")
+	}
+
+	cmd, cleanup, err := buildTaskCommand("printf 'ok'")
+	if err != nil {
+		t.Fatalf("buildTaskCommand returned error: %v", err)
+	}
+	defer cleanup()
+
+	if got := strings.Join(cmd.Args, " "); got != "sh -c printf 'ok'" {
+		t.Fatalf("expected sh -c fallback, got %q", got)
 	}
 }
 

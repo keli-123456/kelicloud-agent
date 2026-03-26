@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -30,17 +31,17 @@ func NewTask(task_id, command string) {
 		return
 	}
 	log.Printf("Executing task %s with command: %s", task_id, command)
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "+command)
-	} else {
-		cmd = exec.Command("sh", "-c", command)
+	cmd, cleanup, err := buildTaskCommand(command)
+	if err != nil {
+		uploadTaskResult(task_id, "Failed to prepare command: "+err.Error(), -1, time.Now())
+		return
 	}
+	defer cleanup()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	finishedAt := time.Now()
 
 	result := stdout.String()
@@ -56,6 +57,51 @@ func NewTask(task_id, command string) {
 	}
 
 	uploadTaskResult(task_id, result, exitCode, finishedAt)
+}
+
+func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
+	if runtime.GOOS == "windows" {
+		return exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "+command), func() {}, nil
+	}
+
+	if hasScriptShebang(command) {
+		scriptPath, err := writeTaskScript(command)
+		if err != nil {
+			return nil, nil, err
+		}
+		return exec.Command(scriptPath), func() {
+			_ = os.Remove(scriptPath)
+		}, nil
+	}
+
+	return exec.Command("sh", "-c", command), func() {}, nil
+}
+
+func hasScriptShebang(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.HasPrefix(command, "#!")
+}
+
+func writeTaskScript(command string) (string, error) {
+	file, err := os.CreateTemp("", "komari-task-*.sh")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if _, err := file.WriteString(command); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 func uploadTaskResult(taskID, result string, exitCode int, finishedAt time.Time) {
