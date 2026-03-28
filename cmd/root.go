@@ -79,6 +79,7 @@ var RootCmd = &cobra.Command{
 
 		log.Println("Komari Agent", update.CurrentVersion)
 		log.Println("Github Repo:", update.Repo)
+		server.SetInvalidClientTokenHandler(recoverAutoDiscoveryFromInvalidToken)
 
 		// 设置 DNS 解析行为
 		if flags.CustomDNS != "" {

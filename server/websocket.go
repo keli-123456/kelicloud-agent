@@ -3,7 +3,7 @@ package server
 import (
 	"crypto/tls"
 	"encoding/json"
-	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -19,16 +19,6 @@ import (
 
 func EstablishWebSocketConnection() {
 	monitoring.StartCNConnectivityProbeLoop()
-
-	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/report?token=" + flags.Token
-	websocketEndpoint = "ws" + strings.TrimPrefix(websocketEndpoint, "http")
-
-	// 转换中文域名为 ASCII 兼容编码
-	if convertedEndpoint, err := utils.ConvertIDNToASCII(websocketEndpoint); err == nil {
-		websocketEndpoint = convertedEndpoint
-	} else {
-		log.Printf("Warning: Failed to convert WebSocket IDN to ASCII: %v", err)
-	}
 
 	var conn *ws.SafeConn
 	defer func() {
@@ -60,14 +50,18 @@ func EstablishWebSocketConnection() {
 					if retry > 0 {
 						log.Println("Retrying websocket connection, attempt:", retry)
 					}
-					conn, err = connectWebSocket(websocketEndpoint)
+					currentToken := strings.TrimSpace(flags.Token)
+					websocketEndpoint := buildWebSocketReportEndpoint(currentToken)
+					conn, err = connectWebSocket(websocketEndpoint, currentToken)
 					if err == nil {
 						log.Println("WebSocket connected")
 						go handleWebSocketMessages(conn, make(chan struct{}))
 						break
-					} else {
-						log.Println("Failed to connect to WebSocket:", err)
 					}
+					if handleInvalidClientToken(err) {
+						continue
+					}
+					log.Println("Failed to connect to WebSocket:", err)
 					retry++
 					time.Sleep(time.Duration(flags.ReconnectInterval) * time.Second)
 				}
@@ -99,15 +93,31 @@ func EstablishWebSocketConnection() {
 	}
 }
 
-func connectWebSocket(websocketEndpoint string) (*ws.SafeConn, error) {
+func buildWebSocketReportEndpoint(token string) string {
+	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/report?token=" + token
+	websocketEndpoint = "ws" + strings.TrimPrefix(websocketEndpoint, "http")
+
+	// 转换中文域名为 ASCII 兼容编码
+	if convertedEndpoint, err := utils.ConvertIDNToASCII(websocketEndpoint); err == nil {
+		return convertedEndpoint
+	} else {
+		log.Printf("Warning: Failed to convert WebSocket IDN to ASCII: %v", err)
+	}
+
+	return websocketEndpoint
+}
+
+func connectWebSocket(websocketEndpoint, token string) (*ws.SafeConn, error) {
 	dialer := newWSDialer()
 
 	headers := newWSHeaders()
 
 	conn, resp, err := dialer.Dial(websocketEndpoint, headers)
 	if err != nil {
-		if resp != nil && resp.StatusCode != 101 {
-			return nil, fmt.Errorf("%s", resp.Status)
+		if resp != nil {
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			return nil, classifyClientTokenResponse("connect websocket", token, resp.StatusCode, string(body))
 		}
 		return nil, err
 	}
@@ -138,6 +148,9 @@ func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}) {
 			CNConnectivityEnabled  bool   `json:"cn_connectivity_enabled,omitempty"`
 			CNConnectivityTarget   string `json:"cn_connectivity_target,omitempty"`
 			CNConnectivityInterval int    `json:"cn_connectivity_interval,omitempty"`
+			CNConnectivityRetry    int    `json:"cn_connectivity_retry_attempts,omitempty"`
+			CNConnectivityRetryGap int    `json:"cn_connectivity_retry_delay_seconds,omitempty"`
+			CNConnectivityTimeout  int    `json:"cn_connectivity_timeout_seconds,omitempty"`
 		}
 		err = json.Unmarshal(message_raw, &message)
 		if err != nil {
@@ -150,6 +163,9 @@ func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}) {
 				message.CNConnectivityEnabled,
 				message.CNConnectivityTarget,
 				message.CNConnectivityInterval,
+				message.CNConnectivityRetry,
+				message.CNConnectivityRetryGap,
+				message.CNConnectivityTimeout,
 			)
 			continue
 		}

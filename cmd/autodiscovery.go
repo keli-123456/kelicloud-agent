@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,9 +11,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/komari-monitor/komari-agent/server"
 	"github.com/komari-monitor/komari-agent/utils"
 )
 
@@ -37,8 +41,17 @@ type RegisterResponse struct {
 	} `json:"data"`
 }
 
+var (
+	autoDiscoveryFilePathOverride string
+	autoDiscoveryRecoveryMu       sync.Mutex
+)
+
 // getAutoDiscoveryFilePath 获取自动发现配置文件路径
 func getAutoDiscoveryFilePath() string {
+	if override := strings.TrimSpace(autoDiscoveryFilePathOverride); override != "" {
+		return override
+	}
+
 	// 获取程序运行目录
 	execPath, err := os.Executable()
 	if err != nil {
@@ -89,6 +102,14 @@ func saveAutoDiscoveryConfig(config *AutoDiscoveryConfig) error {
 	}
 
 	log.Printf("Auto-discovery config saved to: %s", configPath)
+	return nil
+}
+
+func clearAutoDiscoveryConfig() error {
+	configPath := getAutoDiscoveryFilePath()
+	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove auto-discovery config: %v", err)
+	}
 	return nil
 }
 
@@ -198,4 +219,40 @@ func handleAutoDiscovery() error {
 	// 配置文件不存在，进行注册
 	log.Println("Auto-discovery config not found, registering with server...")
 	return registerWithAutoDiscovery()
+}
+
+func recoverAutoDiscoveryFromInvalidToken(err error) bool {
+	if strings.TrimSpace(flags.AutoDiscoveryKey) == "" || !server.IsInvalidClientTokenError(err) {
+		return false
+	}
+
+	autoDiscoveryRecoveryMu.Lock()
+	defer autoDiscoveryRecoveryMu.Unlock()
+
+	var invalidTokenErr *server.InvalidClientTokenError
+	if errors.As(err, &invalidTokenErr) {
+		failedToken := strings.TrimSpace(invalidTokenErr.Token)
+		if failedToken != "" && strings.TrimSpace(flags.Token) != failedToken {
+			return true
+		}
+		if invalidTokenErr.Operation != "" {
+			log.Printf("Detected stale auto-discovery token during %s, re-registering...", invalidTokenErr.Operation)
+		}
+	} else {
+		log.Printf("Detected stale auto-discovery token, re-registering...")
+	}
+
+	if err := clearAutoDiscoveryConfig(); err != nil {
+		log.Printf("Failed to clear auto-discovery config before re-registering: %v", err)
+		return false
+	}
+
+	flags.Token = ""
+	if err := registerWithAutoDiscovery(); err != nil {
+		log.Printf("Auto-discovery re-registration failed: %v", err)
+		return false
+	}
+
+	log.Printf("Auto-discovery re-registration succeeded with a new node binding.")
+	return true
 }

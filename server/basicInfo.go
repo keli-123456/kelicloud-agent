@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -61,10 +60,19 @@ func uploadBasicInfo() error {
 	// 尝试上传完整数据
 	err := tryUploadData(data)
 	if err != nil {
+		if handleInvalidClientToken(err) {
+			err = tryUploadData(data)
+			if err == nil {
+				return nil
+			}
+		}
 		// 兼容 <= 1.0.2
 		delete(data, "kernel_version")
 		err = tryUploadData(data)
 		if err != nil {
+			if handleInvalidClientToken(err) {
+				return tryUploadData(data)
+			}
 			return err
 		}
 	}
@@ -72,7 +80,8 @@ func uploadBasicInfo() error {
 }
 
 func tryUploadData(data map[string]interface{}) error {
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/uploadBasicInfo?token=" + flags.Token
+	token := strings.TrimSpace(flags.Token)
+	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/uploadBasicInfo?token=" + token
 	payload, err := json.Marshal(data)
 	if err != nil {
 		return err
@@ -105,7 +114,7 @@ func tryUploadData(data map[string]interface{}) error {
 	message := string(body)
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status code: %d,%s", resp.StatusCode, message)
+		return classifyClientTokenResponse("upload basic info", token, resp.StatusCode, message)
 	}
 
 	return nil

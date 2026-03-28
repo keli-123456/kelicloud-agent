@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -11,16 +12,21 @@ import (
 )
 
 const (
-	defaultCNConnectivityInterval = 60
-	cnConnectivityFailureLimit    = 2
-	cnConnectivityTimeout         = 5 * time.Second
+	defaultCNConnectivityInterval       = 60
+	defaultCNConnectivityRetryAttempts  = 3
+	defaultCNConnectivityRetryDelaySecs = 1
+	defaultCNConnectivityTimeoutSecs    = 5
+	cnConnectivityFailureLimit          = 2
 )
 
 type CNConnectivityProbeConfig struct {
-	Enabled    bool
-	Targets    []string
-	TargetsKey string
-	Interval   int
+	Enabled           bool
+	Targets           []string
+	TargetsKey        string
+	Interval          int
+	RetryAttempts     int
+	RetryDelaySeconds int
+	TimeoutSeconds    int
 }
 
 type CNConnectivityProbeResult struct {
@@ -49,20 +55,32 @@ func StartCNConnectivityProbeLoop() {
 	})
 }
 
-func UpdateCNConnectivityProbeConfig(enabled bool, target string, interval int) {
+func UpdateCNConnectivityProbeConfig(enabled bool, target string, interval, retryAttempts, retryDelaySeconds, timeoutSeconds int) {
 	targets := parseCNConnectivityTargets(target)
 	if interval <= 0 {
 		interval = defaultCNConnectivityInterval
+	}
+	if retryAttempts <= 0 {
+		retryAttempts = defaultCNConnectivityRetryAttempts
+	}
+	if retryDelaySeconds <= 0 {
+		retryDelaySeconds = defaultCNConnectivityRetryDelaySecs
+	}
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = defaultCNConnectivityTimeoutSecs
 	}
 
 	cnConnectivityState.mu.Lock()
 	defer cnConnectivityState.mu.Unlock()
 
 	cnConnectivityState.config = CNConnectivityProbeConfig{
-		Enabled:    enabled && len(targets) > 0,
-		Targets:    targets,
-		TargetsKey: strings.Join(targets, "\n"),
-		Interval:   interval,
+		Enabled:           enabled && len(targets) > 0,
+		Targets:           targets,
+		TargetsKey:        strings.Join(targets, "\n"),
+		Interval:          interval,
+		RetryAttempts:     retryAttempts,
+		RetryDelaySeconds: retryDelaySeconds,
+		TimeoutSeconds:    timeoutSeconds,
 	}
 
 	cnConnectivityState.failures = 0
@@ -102,7 +120,7 @@ func runCNConnectivityProbeLoop() {
 			continue
 		}
 
-		result := probeCNConnectivityTargets(config.Targets)
+		result := probeCNConnectivityTargets(config)
 		storeCNConnectivityProbeResult(config, result)
 
 		timer := time.NewTimer(time.Duration(config.Interval) * time.Second)
@@ -150,6 +168,9 @@ func storeCNConnectivityProbeResult(config CNConnectivityProbeConfig, result CNC
 func sameCNConnectivityProbeConfig(a, b CNConnectivityProbeConfig) bool {
 	return a.Enabled == b.Enabled &&
 		a.Interval == b.Interval &&
+		a.RetryAttempts == b.RetryAttempts &&
+		a.RetryDelaySeconds == b.RetryDelaySeconds &&
+		a.TimeoutSeconds == b.TimeoutSeconds &&
 		a.TargetsKey == b.TargetsKey
 }
 
@@ -175,8 +196,8 @@ func parseCNConnectivityTargets(raw string) []string {
 	return targets
 }
 
-func probeCNConnectivityTargets(targets []string) CNConnectivityProbeResult {
-	if len(targets) == 0 {
+func probeCNConnectivityTargets(config CNConnectivityProbeConfig) CNConnectivityProbeResult {
+	if len(config.Targets) == 0 {
 		return CNConnectivityProbeResult{
 			Status:    "degraded",
 			Message:   "no targets configured",
@@ -184,9 +205,14 @@ func probeCNConnectivityTargets(targets []string) CNConnectivityProbeResult {
 		}
 	}
 
-	failures := make([]string, 0, len(targets))
-	for _, target := range targets {
-		result := probeCNConnectivity(target)
+	failures := make([]string, 0, len(config.Targets))
+	for _, target := range config.Targets {
+		result := probeCNConnectivity(
+			target,
+			config.RetryAttempts,
+			time.Duration(config.RetryDelaySeconds)*time.Second,
+			time.Duration(config.TimeoutSeconds)*time.Second,
+		)
 		if result.Status == "ok" {
 			return result
 		}
@@ -195,28 +221,59 @@ func probeCNConnectivityTargets(targets []string) CNConnectivityProbeResult {
 
 	return CNConnectivityProbeResult{
 		Status:    "degraded",
-		Target:    strings.Join(targets, ", "),
+		Target:    strings.Join(config.Targets, ", "),
 		Message:   strings.Join(failures, "; "),
 		CheckedAt: time.Now(),
 	}
 }
 
-func probeCNConnectivity(target string) CNConnectivityProbeResult {
-	latency, err := icmpPingTarget(target, cnConnectivityTimeout)
+func probeCNConnectivity(target string, retryAttempts int, retryDelay, timeout time.Duration) CNConnectivityProbeResult {
+	return probeCNConnectivityWithProber(target, func(target string) (int64, error) {
+		return icmpPingTarget(target, timeout)
+	}, func() {
+		time.Sleep(retryDelay)
+	}, retryAttempts)
+}
+
+func probeCNConnectivityWithProber(target string, prober func(string) (int64, error), waitRetry func(), retryAttempts int) CNConnectivityProbeResult {
 	result := CNConnectivityProbeResult{
 		Target:    target,
 		CheckedAt: time.Now(),
 	}
 
-	if err != nil {
-		result.Status = "degraded"
-		result.Message = err.Error()
-		return result
+	attempts := retryAttempts
+	if attempts < 1 {
+		attempts = defaultCNConnectivityRetryAttempts
 	}
 
-	result.Status = "ok"
-	result.Latency = latency
-	result.Message = "icmp reachable"
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		latency, err := prober(target)
+		if err == nil {
+			result.Status = "ok"
+			result.Latency = latency
+			result.Message = "icmp reachable"
+			result.CheckedAt = time.Now()
+			return result
+		}
+
+		lastErr = err
+		if attempt < attempts && waitRetry != nil {
+			waitRetry()
+		}
+	}
+
+	result.Status = "degraded"
+	if lastErr != nil {
+		if attempts == 1 {
+			result.Message = lastErr.Error()
+		} else {
+			result.Message = fmt.Sprintf("%s after %d attempts", lastErr.Error(), attempts)
+		}
+	} else {
+		result.Message = "connectivity probe failed"
+	}
+	result.CheckedAt = time.Now()
 	return result
 }
 
