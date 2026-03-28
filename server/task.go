@@ -18,6 +18,8 @@ import (
 	ping "github.com/prometheus-community/pro-bing"
 )
 
+var lookPath = exec.LookPath
+
 func NewTask(task_id, command string) {
 	if task_id == "" {
 		return
@@ -72,6 +74,10 @@ func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
 		return exec.Command(scriptPath), func() {
 			_ = os.Remove(scriptPath)
 		}, nil
+	}
+
+	if bashPath, err := lookPath("bash"); err == nil {
+		return exec.Command(bashPath, "-lc", command), func() {}, nil
 	}
 
 	return exec.Command("sh", "-c", command), func() {}, nil

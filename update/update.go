@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	CurrentVersion string = "0.0.6"
+	CurrentVersion string = "0.0.7"
 	Repo           string = "keli-123456/kelicloud-agent"
 )
 

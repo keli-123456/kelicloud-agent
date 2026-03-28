@@ -196,6 +196,63 @@ func TestBuildTaskCommandFallsBackToShellForPlainCommands(t *testing.T) {
 	}
 	defer cleanup()
 
+	if bashPath, err := exec.LookPath("bash"); err == nil {
+		if got := strings.Join(cmd.Args, " "); got != bashPath+" -lc printf 'ok'" {
+			t.Fatalf("expected bash -lc command, got %q", got)
+		}
+		return
+	}
+
+	if got := strings.Join(cmd.Args, " "); got != "sh -c printf 'ok'" {
+		t.Fatalf("expected sh -c fallback, got %q", got)
+	}
+}
+
+func TestBuildTaskCommandRunsBashSyntaxWhenBashAvailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-only")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash not available: %v", err)
+	}
+
+	cmd, cleanup, err := buildTaskCommand("items=(ok); printf '%s' \"${items[0]}\"")
+	if err != nil {
+		t.Fatalf("buildTaskCommand returned error: %v", err)
+	}
+	defer cleanup()
+
+	output, runErr := cmd.Output()
+	if runErr != nil {
+		t.Fatalf("expected bash syntax to execute successfully, got %v", runErr)
+	}
+	if string(output) != "ok" {
+		t.Fatalf("expected output %q, got %q", "ok", string(output))
+	}
+}
+
+func TestBuildTaskCommandFallsBackToShWhenBashUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-only")
+	}
+
+	original := lookPath
+	lookPath = func(file string) (string, error) {
+		if file == "bash" {
+			return "", exec.ErrNotFound
+		}
+		return exec.LookPath(file)
+	}
+	defer func() {
+		lookPath = original
+	}()
+
+	cmd, cleanup, err := buildTaskCommand("printf 'ok'")
+	if err != nil {
+		t.Fatalf("buildTaskCommand returned error: %v", err)
+	}
+	defer cleanup()
+
 	if got := strings.Join(cmd.Args, " "); got != "sh -c printf 'ok'" {
 		t.Fatalf("expected sh -c fallback, got %q", got)
 	}
