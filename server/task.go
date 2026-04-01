@@ -327,7 +327,7 @@ func NewPingTask(conn *ws.SafeConn, taskID uint, pingType, pingTarget string) {
 	//if pingResult == -1 {
 	//	return
 	//}
-	if err := conn.WriteJSON(payload); err != nil {
+	if err := conn.WriteJSONWithDeadline(payload, time.Now().Add(wsWriteTimeout)); err != nil {
 		log.Printf("Failed to write JSON to WebSocket: %v", err)
 	}
 

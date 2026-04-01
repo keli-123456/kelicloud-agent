@@ -17,6 +17,8 @@ import (
 	"github.com/komari-monitor/komari-agent/ws"
 )
 
+const wsWriteTimeout = 15 * time.Second
+
 func EstablishWebSocketConnection() {
 	monitoring.StartCNConnectivityProbeLoop()
 
@@ -73,7 +75,7 @@ func EstablishWebSocketConnection() {
 			}
 
 			data := monitoring.GenerateReport()
-			err = conn.WriteMessage(websocket.TextMessage, data)
+			err = conn.WriteMessageWithDeadline(websocket.TextMessage, data, time.Now().Add(wsWriteTimeout))
 			if err != nil {
 				log.Println("Failed to send WebSocket message:", err)
 				conn.Close()
@@ -82,7 +84,7 @@ func EstablishWebSocketConnection() {
 			}
 		case <-heartbeatTicker.C:
 			if conn != nil {
-				err := conn.WriteMessage(websocket.PingMessage, nil)
+				err := conn.WriteMessageWithDeadline(websocket.PingMessage, nil, time.Now().Add(wsWriteTimeout))
 				if err != nil {
 					log.Println("Failed to send heartbeat:", err)
 					conn.Close()

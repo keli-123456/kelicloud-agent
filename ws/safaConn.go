@@ -25,9 +25,29 @@ func (sc *SafeConn) WriteMessage(messageType int, data []byte) error {
 	return sc.conn.WriteMessage(messageType, data)
 }
 
+func (sc *SafeConn) WriteMessageWithDeadline(messageType int, data []byte, deadline time.Time) error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if err := sc.conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	defer sc.conn.SetWriteDeadline(time.Time{})
+	return sc.conn.WriteMessage(messageType, data)
+}
+
 func (sc *SafeConn) WriteJSON(v interface{}) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
+	return sc.conn.WriteJSON(v)
+}
+
+func (sc *SafeConn) WriteJSONWithDeadline(v interface{}, deadline time.Time) error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if err := sc.conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	defer sc.conn.SetWriteDeadline(time.Time{})
 	return sc.conn.WriteJSON(v)
 }
 
