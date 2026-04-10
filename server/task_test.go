@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -255,6 +256,66 @@ func TestBuildTaskCommandFallsBackToShWhenBashUnavailable(t *testing.T) {
 
 	if got := strings.Join(cmd.Args, " "); got != "sh -c printf 'ok'" {
 		t.Fatalf("expected sh -c fallback, got %q", got)
+	}
+}
+
+func TestUploadTaskResultRetriesWithFreshRequestBody(t *testing.T) {
+	originalEndpoint := flags.Endpoint
+	originalToken := flags.Token
+	originalMaxRetries := flags.MaxRetries
+	originalDelay := taskResultRetryDelay
+	originalCFAccessClientID := flags.CFAccessClientID
+	originalCFAccessClientSecret := flags.CFAccessClientSecret
+	t.Cleanup(func() {
+		flags.Endpoint = originalEndpoint
+		flags.Token = originalToken
+		flags.MaxRetries = originalMaxRetries
+		flags.CFAccessClientID = originalCFAccessClientID
+		flags.CFAccessClientSecret = originalCFAccessClientSecret
+		taskResultRetryDelay = originalDelay
+	})
+
+	taskResultRetryDelay = 0
+	flags.Token = "test-token"
+	flags.MaxRetries = 1
+
+	requestBodies := make([]string, 0, 2)
+	attempts := 0
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		requestBodies = append(requestBodies, string(body))
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Listener = newLoopbackListener(t, "tcp4")
+	server.Start()
+	defer server.Close()
+
+	flags.Endpoint = server.URL
+
+	uploadTaskResult("task-retry", "done", 0, time.Unix(1700000000, 0).UTC())
+
+	if attempts != 2 {
+		t.Fatalf("expected 2 upload attempts, got %d", attempts)
+	}
+	if len(requestBodies) != 2 {
+		t.Fatalf("expected 2 request bodies, got %d", len(requestBodies))
+	}
+	if requestBodies[0] == "" {
+		t.Fatal("expected first request body to be non-empty")
+	}
+	if requestBodies[0] != requestBodies[1] {
+		t.Fatalf("expected retry request body to match original body, got %q vs %q", requestBodies[0], requestBodies[1])
+	}
+	if !strings.Contains(requestBodies[0], "\"task_id\":\"task-retry\"") {
+		t.Fatalf("expected task_id in request body, got %q", requestBodies[0])
 	}
 }
 

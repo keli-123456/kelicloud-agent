@@ -5,6 +5,8 @@ komari-agent.exe
 komari-agent
 .komari-agent.exe.old
 build/
+.gocache/
+.gomodcache/
 auto-discovery.json
 net_static.json
 config.json

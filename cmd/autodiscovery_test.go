@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,21 @@ import (
 
 	agentserver "github.com/komari-monitor/komari-agent/server"
 )
+
+func newAutoDiscoveryTestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create ipv4 listener: %v", err)
+	}
+
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 func TestRecoverAutoDiscoveryFromInvalidTokenReRegisters(t *testing.T) {
 	originalPathOverride := autoDiscoveryFilePathOverride
@@ -33,7 +49,7 @@ func TestRecoverAutoDiscoveryFromInvalidTokenReRegisters(t *testing.T) {
 	}
 
 	var registerCalls int32
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	testServer := newAutoDiscoveryTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/clients/register" {
 			http.NotFound(w, r)
 			return
@@ -45,7 +61,6 @@ func TestRecoverAutoDiscoveryFromInvalidTokenReRegisters(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","data":{"uuid":"new-uuid","token":"new-token"}}`))
 	}))
-	defer testServer.Close()
 
 	flags.Endpoint = testServer.URL
 
@@ -96,11 +111,10 @@ func TestRecoverAutoDiscoveryFromInvalidTokenSkipsIfTokenAlreadyRotated(t *testi
 	flags.Token = "fresh-token"
 
 	var registerCalls int32
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	testServer := newAutoDiscoveryTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&registerCalls, 1)
 		http.Error(w, "unexpected register", http.StatusInternalServerError)
 	}))
-	defer testServer.Close()
 
 	flags.Endpoint = testServer.URL
 

@@ -19,6 +19,7 @@ import (
 )
 
 var lookPath = exec.LookPath
+var taskResultRetryDelay = 2 * time.Second
 
 func NewTask(task_id, command string) {
 	if task_id == "" {
@@ -118,37 +119,77 @@ func uploadTaskResult(taskID, result string, exitCode int, finishedAt time.Time)
 		"finished_at": finishedAt,
 	}
 
-	jsonData, _ := json.Marshal(payload)
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Failed to marshal task result payload for task %s: %v", taskID, err)
+		return
+	}
 	endpoint := flags.Endpoint + "/api/clients/task/result?token=" + flags.Token
 
-	// 创建HTTP请求以支持自定义头部
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("Failed to create task result request: %v", err)
+	client := &http.Client{}
+	totalAttempts := flags.MaxRetries + 1
+	if totalAttempts < 1 {
+		totalAttempts = 1
+	}
+
+	var lastErr error
+	var lastStatus string
+
+	for attempt := 1; attempt <= totalAttempts; attempt++ {
+		req, err := newTaskResultRequest(endpoint, jsonData)
+		if err != nil {
+			log.Printf("Failed to create task result request for task %s: %v", taskID, err)
+			return
+		}
+
+		resp, err := client.Do(req)
+		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
+			_ = resp.Body.Close()
+			return
+		}
+
+		lastErr = err
+		lastStatus = ""
+		if resp != nil {
+			lastStatus = resp.Status
+			_ = resp.Body.Close()
+		}
+
+		if attempt == totalAttempts {
+			break
+		}
+
+		if err != nil {
+			log.Printf("Failed to upload task result for task %s, retrying %d/%d: %v", taskID, attempt, totalAttempts, err)
+		} else {
+			log.Printf("Failed to upload task result for task %s, retrying %d/%d: %s", taskID, attempt, totalAttempts, lastStatus)
+		}
+
+		time.Sleep(taskResultRetryDelay)
+	}
+
+	if lastErr != nil {
+		log.Printf("Failed to upload task result for task %s after %d attempts: %v", taskID, totalAttempts, lastErr)
 		return
+	}
+	if lastStatus != "" {
+		log.Printf("Failed to upload task result for task %s after %d attempts: %s", taskID, totalAttempts, lastStatus)
+	}
+}
+
+func newTaskResultRequest(endpoint string, payload []byte) (*http.Request, error) {
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// 添加Cloudflare Access头部（如果配置了）
 	if flags.CFAccessClientID != "" && flags.CFAccessClientSecret != "" {
 		req.Header.Set("CF-Access-Client-Id", flags.CFAccessClientID)
 		req.Header.Set("CF-Access-Client-Secret", flags.CFAccessClientSecret)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	maxRetry := flags.MaxRetries
-	for i := 0; i < maxRetry && (err != nil || resp.StatusCode != http.StatusOK); i++ {
-		log.Printf("Failed to upload task result, retrying %d/%d", i+1, maxRetry)
-		time.Sleep(2 * time.Second) // Wait before retrying
-		resp, err = client.Do(req)
-	}
-	if resp != nil {
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("Failed to upload task result: %s", resp.Status)
-		}
-	}
+	return req, nil
 }
 
 // resolveIP 解析域名到 IP 地址，排除 DNS 查询时间
