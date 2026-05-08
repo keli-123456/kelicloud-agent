@@ -70,6 +70,7 @@ func shouldSkipICMP(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "operation not permitted") ||
 		strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "not implemented") ||
 		strings.Contains(message, "no packets received")
 }
 
