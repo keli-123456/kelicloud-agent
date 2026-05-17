@@ -1,4 +1,4 @@
-# Windows PowerShell installation script for Komari Agent
+# Windows PowerShell installation script for kelicloud Agent
 
 # Logging functions with colors
 function Log-Info { param([string]$Message) Write-Host "$Message"    -ForegroundColor Cyan }
@@ -9,8 +9,8 @@ function Log-Step { param([string]$Message) Write-Host "$Message"    -Foreground
 function Log-Config { param([string]$Message) Write-Host "- $Message"    -ForegroundColor White }
 
 # Default parameters
-$InstallDir = Join-Path $Env:ProgramFiles "Komari"
-$ServiceName = "komari-agent"
+$InstallDir = Join-Path $Env:ProgramFiles "kelicloud-agent"
+$ServiceName = "kelicloud-agent"
 $GitHubProxy = ""
 $KomariArgs = @()
 $InstallVersion = ""
@@ -168,8 +168,9 @@ if ($InstallVersion -ne "") {
 }
 
 # Paths
-$BinaryName = "komari-agent-windows-$arch.exe"
-$AgentPath = Join-Path $InstallDir "komari-agent.exe"
+$BinaryName = "kelicloud-agent-windows-$arch.exe"
+$LegacyBinaryName = "komari-agent-windows-$arch.exe"
+$AgentPath = Join-Path $InstallDir "kelicloud-agent.exe"
 
 # Uninstall previous service and binary
 function Uninstall-Previous {
@@ -224,11 +225,11 @@ else {
         exit 1
     }
 }
-Log-Success "Installing Komari Agent version: $versionToInstall"
+Log-Success "Installing kelicloud Agent version: $versionToInstall"
 
 # Construct download URL
-$BinaryName = "komari-agent-windows-$arch.exe"
 $DownloadUrl = if ($GitHubProxy) { "$GitHubProxy/https://github.com/keli-123456/kelicloud-agent/releases/download/$versionToInstall/$BinaryName" } else { "https://github.com/keli-123456/kelicloud-agent/releases/download/$versionToInstall/$BinaryName" }
+$LegacyDownloadUrl = if ($GitHubProxy) { "$GitHubProxy/https://github.com/keli-123456/kelicloud-agent/releases/download/$versionToInstall/$LegacyBinaryName" } else { "https://github.com/keli-123456/kelicloud-agent/releases/download/$versionToInstall/$LegacyBinaryName" }
 
 # Download and install
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -237,8 +238,14 @@ try {
     Invoke-WebRequest -Uri $DownloadUrl -OutFile $AgentPath -UseBasicParsing
 }
 catch {
-    Log-Error "Download failed: $_"
-    exit 1
+    Log-Warning "Download failed for $BinaryName, trying legacy asset $LegacyBinaryName..."
+    try {
+        Invoke-WebRequest -Uri $LegacyDownloadUrl -OutFile $AgentPath -UseBasicParsing
+    }
+    catch {
+        Log-Error "Download failed: $_"
+        exit 1
+    }
 }
 Log-Success "Downloaded and saved to $AgentPath"
 
@@ -249,7 +256,7 @@ $argString = $KomariArgs -join ' '
 $quotedAgentPath = "`"$AgentPath`""
 nssm install $ServiceName $quotedAgentPath $argString
 # Set display name and startup type using nssm
-nssm set $ServiceName DisplayName "Komari Agent Service"
+nssm set $ServiceName DisplayName "kelicloud Agent Service"
 nssm set $ServiceName Start SERVICE_AUTO_START
 nssm set $ServiceName AppExit Default Restart
 nssm set $ServiceName AppRestartDelay 5000
@@ -257,6 +264,6 @@ nssm set $ServiceName AppRestartDelay 5000
 nssm start $ServiceName
 Log-Success "Service $ServiceName installed and started using nssm."
 
-Log-Success "Komari Agent installation completed!"
+Log-Success "kelicloud Agent installation completed!"
 Log-Config "Service name: $ServiceName"
 Log-Config "Arguments: $argString"

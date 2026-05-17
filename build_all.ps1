@@ -36,7 +36,7 @@ foreach ($goos in $osList) {
 
         Write-Host "Building for $goos/$goarch..." -ForegroundColor $White
 
-        $binaryName = "komari-agent-$goos-$goarch"
+        $binaryName = "kelicloud-agent-$goos-$goarch"
         if ($goos -eq 'windows') { $binaryName = "$binaryName.exe" }
         $outPath = Join-Path $buildDir $binaryName
 

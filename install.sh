@@ -36,8 +36,8 @@ log_config() {
 }
 
 # Default values
-service_name="komari-agent"
-target_dir="/opt/komari"
+service_name="kelicloud-agent"
+target_dir="/opt/kelicloud-agent"
 github_proxy=""
 install_version="" # New parameter for specifying version
  
@@ -47,10 +47,10 @@ os_type=$(uname -s)
 case $os_type in
     Darwin)
         os_name="darwin"
-        target_dir="/usr/local/komari"  # Use /usr/local on macOS
+        target_dir="/usr/local/kelicloud-agent"  # Use /usr/local on macOS
         # Check if we can write to /usr/local, fallback to user directory
         if [ ! -w "/usr/local" ] && [ "$EUID" -ne 0 ]; then
-            target_dir="$HOME/.komari"
+            target_dir="$HOME/.kelicloud-agent"
             log_info "No write permission to /usr/local, using user directory: $target_dir"
         fi
         ;;
@@ -62,7 +62,7 @@ case $os_type in
         ;;
     MINGW*|MSYS*|CYGWIN*)
         os_name="windows"
-        target_dir="/c/komari"  # Use C:\komari on Windows
+        target_dir="/c/kelicloud-agent"  # Use C:\kelicloud-agent on Windows
         ;;
     *)
         log_error "Unsupported operating system: $os_type"
@@ -121,7 +121,7 @@ if [ "$EUID" -ne 0 ] && [ "$require_root_for_deps" = true ]; then
 fi
 
 echo -e "${WHITE}===========================================${NC}"
-echo -e "${WHITE}    Komari Agent Installation Script     ${NC}"
+echo -e "${WHITE}    kelicloud Agent Installation Script     ${NC}"
 echo -e "${WHITE}===========================================${NC}"
 echo ""
 log_config "Installation configuration:"
@@ -163,8 +163,8 @@ uninstall_previous() {
         rm -f "/etc/init/${service_name}.conf"
     elif [ "$os_name" = "darwin" ] && command -v launchctl >/dev/null 2>&1; then
         # macOS launchd service - check both system and user locations
-        system_plist="/Library/LaunchDaemons/com.komari.${service_name}.plist"
-        user_plist="$HOME/Library/LaunchAgents/com.komari.${service_name}.plist"
+        system_plist="/Library/LaunchDaemons/com.kelicloud.${service_name}.plist"
+        user_plist="$HOME/Library/LaunchAgents/com.kelicloud.${service_name}.plist"
         
         if [ -f "$system_plist" ]; then
             log_info "Stopping and removing existing system launchd service..."
@@ -288,7 +288,8 @@ else
 fi
 
 # Construct download URL
-file_name="komari-agent-${os_name}-${arch}"
+file_name="kelicloud-agent-${os_name}-${arch}"
+legacy_file_name="komari-agent-${os_name}-${arch}"
 if [ "$version_to_install" = "latest" ]; then
     download_path="latest/download"
 else
@@ -298,9 +299,11 @@ fi
 if [ -n "$github_proxy" ]; then
     # Use proxy for GitHub releases
     download_url="${github_proxy}/https://github.com/keli-123456/kelicloud-agent/releases/${download_path}/${file_name}"
+    legacy_download_url="${github_proxy}/https://github.com/keli-123456/kelicloud-agent/releases/${download_path}/${legacy_file_name}"
 else
     # Direct access to GitHub releases
     download_url="https://github.com/keli-123456/kelicloud-agent/releases/${download_path}/${file_name}"
+    legacy_download_url="https://github.com/keli-123456/kelicloud-agent/releases/${download_path}/${legacy_file_name}"
 fi
 
 log_step "Creating installation directory: ${GREEN}$target_dir${NC}"
@@ -314,14 +317,17 @@ else
     log_step "Downloading $file_name directly..."
     log_info "URL: ${CYAN}$download_url${NC}"
 fi
-if ! curl -L -o "$komari_agent_path" "$download_url"; then
-    log_error "Download failed"
-    exit 1
+if ! curl -fL -o "$komari_agent_path" "$download_url"; then
+    log_warning "Download failed for $file_name, trying legacy asset $legacy_file_name..."
+    if ! curl -fL -o "$komari_agent_path" "$legacy_download_url"; then
+        log_error "Download failed"
+        exit 1
+    fi
 fi
 
 # Set executable permissions
 chmod +x "$komari_agent_path"
-log_success "Komari-agent installed to ${GREEN}$komari_agent_path${NC}"
+log_success "kelicloud-agent installed to ${GREEN}$komari_agent_path${NC}"
 
 # Detect init system and configure service
 log_step "Configuring system service..."
@@ -424,7 +430,7 @@ if [ "$init_system" = "nixos" ]; then
     log_info "Please add the following to your NixOS configuration:"
     echo ""
     echo -e "${CYAN}systemd.services.${service_name} = {${NC}"
-    echo -e "${CYAN}  description = \"Komari Agent Service\";${NC}"
+    echo -e "${CYAN}  description = \"kelicloud Agent Service\";${NC}"
     echo -e "${CYAN}  after = [ \"network.target\" ];${NC}"
     echo -e "${CYAN}  wantedBy = [ \"multi-user.target\" ];${NC}"
     echo -e "${CYAN}  serviceConfig = {${NC}"
@@ -445,8 +451,8 @@ elif [ "$init_system" = "openrc" ]; then
     cat > "$service_file" << EOF
 #!/sbin/openrc-run
 
-name="Komari Agent Service"
-description="Komari monitoring agent"
+name="kelicloud Agent Service"
+description="kelicloud monitoring agent"
 command="${komari_agent_path}"
 command_args="${komari_args}"
 command_user="root"
@@ -472,7 +478,7 @@ elif [ "$init_system" = "systemd" ]; then
     service_file="/etc/systemd/system/${service_name}.service"
     cat > "$service_file" << EOF
 [Unit]
-Description=Komari Agent Service
+Description=kelicloud Agent Service
 After=network.target
 
 [Service]
@@ -539,7 +545,7 @@ elif [ "$init_system" = "launchd" ]; then
     if [[ "$target_dir" =~ ^/Users/.* ]] || [ "$EUID" -ne 0 ]; then
         # User-level service (LaunchAgent)
         plist_dir="$HOME/Library/LaunchAgents"
-        plist_file="$plist_dir/com.komari.${service_name}.plist"
+        plist_file="$plist_dir/com.kelicloud.${service_name}.plist"
         log_info "Installing as user-level service (LaunchAgent)"
         mkdir -p "$plist_dir"
         service_user="$(whoami)"
@@ -547,7 +553,7 @@ elif [ "$init_system" = "launchd" ]; then
     else
         # System-level service (LaunchDaemon)
         plist_dir="/Library/LaunchDaemons"
-        plist_file="$plist_dir/com.komari.${service_name}.plist"
+        plist_file="$plist_dir/com.kelicloud.${service_name}.plist"
         log_info "Installing as system-level service (LaunchDaemon)"
         service_user="root"
         log_dir="/var/log"
@@ -560,7 +566,7 @@ elif [ "$init_system" = "launchd" ]; then
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.komari.${service_name}</string>
+    <string>com.kelicloud.${service_name}</string>
     <key>ProgramArguments</key>
     <array>
         <string>${komari_agent_path}</string>
@@ -612,8 +618,8 @@ elif [ "$init_system" = "upstart" ]; then
     log_info "Using upstart for service management"
     service_file="/etc/init/${service_name}.conf"
     cat > "$service_file" << EOF
-# KOMARI Agent
-description "Komari Agent Service"
+# kelicloud Agent
+description "kelicloud Agent Service"
 
 chdir ${target_dir}
 start on filesystem or runlevel [2345]
@@ -647,11 +653,11 @@ fi
 echo ""
 echo -e "${WHITE}===========================================${NC}"
 if [ -f /etc/NIXOS ]; then
-    log_success "Komari-agent binary installed!"
+    log_success "kelicloud-agent binary installed!"
     log_warning "NixOS requires declarative service configuration."
     log_info "Please add the service configuration to your NixOS config and rebuild."
 else
-    log_success "Komari-agent installation completed!"
+    log_success "kelicloud-agent installation completed!"
 fi
 log_config "Service: ${GREEN}$service_name${NC}"
 log_config "Arguments: ${GREEN}$komari_args${NC}"

@@ -16,7 +16,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
   go build -trimpath \
   -ldflags="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" \
-  -o /out/komari-agent .
+  -o /out/kelicloud-agent .
 
 FROM alpine:3.21
 
@@ -26,14 +26,14 @@ WORKDIR /app
 ARG TARGETOS
 ARG TARGETARCH
 
-COPY --from=builder /out/komari-agent /app/komari-agent
+COPY --from=builder /out/kelicloud-agent /app/kelicloud-agent
 
-RUN chmod +x /app/komari-agent
+RUN chmod +x /app/kelicloud-agent
 
-RUN touch /.komari-agent-container
+RUN touch /.kelicloud-agent-container
 
-ENTRYPOINT ["/app/komari-agent"]
+ENTRYPOINT ["/app/kelicloud-agent"]
 # 运行时请指定参数
 # Please specify parameters at runtime.
-# eg: docker run komari-agent -e example.com -t token
+# eg: docker run kelicloud-agent -e example.com -t token
 CMD ["--help"]

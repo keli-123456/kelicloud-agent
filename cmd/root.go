@@ -26,9 +26,9 @@ import (
 var flags = pkg_flags.GlobalConfig
 
 var RootCmd = &cobra.Command{
-	Use:   "komari-agent",
-	Short: "komari agent",
-	Long:  `komari agent`,
+	Use:   "kelicloud-agent",
+	Short: "kelicloud agent",
+	Long:  `kelicloud agent`,
 	Run: func(cmd *cobra.Command, args []string) {
 		loadFromEnv() // 从环境变量加载配置，覆盖解析
 		if flags.ConfigFile != "" {
@@ -77,7 +77,7 @@ var RootCmd = &cobra.Command{
 			}
 		}
 
-		log.Println("Komari Agent", update.CurrentVersion)
+		log.Println("kelicloud agent", update.CurrentVersion)
 		log.Println("Github Repo:", update.Repo)
 		server.SetInvalidClientTokenHandler(recoverAutoDiscoveryFromInvalidToken)
 

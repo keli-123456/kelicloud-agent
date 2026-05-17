@@ -84,7 +84,7 @@ func detectContainer() string {
 	if s := parseCgroupForContainer(); s != "" {
 		return s
 	}
-	if fileExists("/.komari-agent-container") {
+	if fileExists("/.kelicloud-agent-container") || fileExists("/.komari-agent-container") {
 		return "container"
 	}
 	// (Removed mountinfo heuristics which caused host false positives when Docker/Kube tools are installed.)
