@@ -70,7 +70,7 @@ jobs:
           CGO_ENABLED: 0
           VERSION: ${{ needs.ensure-release.outputs.release_tag }}
         run: |
-          BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          BINARY_NAME=kelicloud-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
@@ -83,7 +83,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          BINARY_NAME=kelicloud-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
           elif [ "${{ matrix.goos }}" = "darwin" ]; then

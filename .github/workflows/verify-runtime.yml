@@ -24,10 +24,10 @@ jobs:
         env:
           CGO_ENABLED: 0
           VERSION: verify
-        run: go build -trimpath -ldflags="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o komari-agent .
+        run: go build -trimpath -ldflags="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o kelicloud-agent .
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: komari-agent-linux-amd64-verify
-          path: komari-agent
+          name: kelicloud-agent-linux-amd64-verify
+          path: kelicloud-agent
