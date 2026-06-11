@@ -6,7 +6,23 @@ on:
       - main
 
 jobs:
+  go-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Run Go tests
+        run: go test ./...
+
   build:
+    needs: go-tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
